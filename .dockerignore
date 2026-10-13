@@ -1,0 +1,9 @@
+.git
+.gitignore
+data
+docs
+*.md
+t.mid
+**/cipher-sessions.db*
+**/blocks.db*
+**/blocks.db-*

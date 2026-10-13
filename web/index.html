@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dubdutduc · Bitcoin block music</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/tone@15.1.22/build/Tone.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div class="shell">
+    <header class="top">
+      <div class="brand">
+        <pre aria-hidden="true">+----------------------------------------------+</pre>
+        <h1>dubdutduc</h1>
+        <p class="tagline">bitcoin block ---&gt; 16-bar chiptune</p>
+        <pre aria-hidden="true">+----------------------------------------------+</pre>
+      </div>
+      <div class="top-aside">
+        <nav class="doc-nav">
+          <a href="/" aria-current="page">[ player ]</a>
+          <a href="/how.html">[ how ]</a>
+        </nav>
+        <p class="sync" id="sync"><span class="dot" aria-hidden="true">*</span> <span id="sync-text">Connecting...</span></p>
+      </div>
+    </header>
+
+    <main>
+      <section class="player frame" aria-label="Player">
+        <div class="frame-label">./now_playing</div>
+        <div class="now">
+          <p class="eyebrow" id="p-block">No block selected</p>
+          <h2 id="p-key">Waiting for blocks</h2>
+          <p class="meta" id="p-meta"></p>
+          <p class="hash" id="p-hash"></p>
+        </div>
+
+        <div class="roll" id="roll-wrap">
+          <canvas id="roll" aria-label="Piano roll of the selected piece"></canvas>
+          <div class="playhead" id="playhead" hidden></div>
+        </div>
+        <ol class="chords" id="chords" aria-label="Chords"></ol>
+
+        <div class="transport">
+          <button type="button" id="prev" disabled title="Previous block (P)">[ PREV ]</button>
+          <button type="button" id="play" class="primary" disabled>[ PLAY ]</button>
+          <button type="button" id="stop" disabled>[ STOP ]</button>
+          <button type="button" id="next" disabled title="Next block (N)">[ NEXT ]</button>
+          <button type="button" id="auto" aria-pressed="true" title="Play the next block when this one ends">[ AUTO ]</button>
+          <div class="progress" aria-hidden="true"><div id="progress"></div></div>
+          <span class="clock" id="clock">0:00 / 0:00</span>
+          <a class="download" id="download" hidden>[ MIDI ]</a>
+        </div>
+      </section>
+
+      <section class="catalog" aria-label="Blocks">
+        <div class="catalog-head">
+          <h3>./blocks</h3>
+          <span class="count" id="count"></span>
+        </div>
+        <ol class="blocks frame" id="blocks"></ol>
+        <p class="empty frame" id="empty">Fetching recent blocks from mempool.space...</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <pre><a href="/how.html">--- how hash -&gt; scale -&gt; chords -&gt; chip ---</a></pre>
+    </footer>
+  </div>
+</body>
+</html>

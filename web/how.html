@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>how it works · dubdutduc</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div class="shell doc">
+    <header class="top">
+      <div class="brand">
+        <pre aria-hidden="true">+----------------------------------------------+</pre>
+        <h1><a href="/">dubdutduc</a></h1>
+        <p class="tagline">how a block hash becomes MIDI</p>
+        <pre aria-hidden="true">+----------------------------------------------+</pre>
+      </div>
+      <nav class="doc-nav">
+        <a href="/">[ player ]</a>
+        <a href="/how.html" aria-current="page">[ how ]</a>
+      </nav>
+    </header>
+
+    <main class="doc-main">
+      <p class="lede">
+        A Bitcoin block hash is 32 bytes of proof-of-work noise.
+        dubdutduc does <em>not</em> map those bytes onto pitches.
+        It turns the hash into a deterministic random stream, then walks a fixed
+        composition pipeline — and every fork in that pipeline asks the stream for the next number.
+      </p>
+
+      <section class="frame doc-section" id="exploit">
+        <div class="frame-label">01 // the hash</div>
+        <h2>How the hash is used</h2>
+        <p>
+          Think of the hash as a <strong>playlist seed</strong>, not as music data.
+          The composer never reads “byte 3 → MIDI note 60”. Instead:
+        </p>
+        <ol>
+          <li>
+            Take the block hash (lowercase hex). If it is exactly 32 bytes of hex,
+            those 32 bytes are the seed. Otherwise hash the string with SHA-256 and use that.
+          </li>
+          <li>
+            Feed the 32-byte seed into a <strong>ChaCha8</strong> pseudorandom number generator.
+            From here on, the hash itself is never looked at again — only this RNG stream.
+          </li>
+          <li>
+            Run a fixed recipe (key → form → melody → harmony → bass → drums).
+            Whenever the recipe must choose among prepared options
+            (which mode? which chord row? which rhythm? which pitch among legal candidates?),
+            it draws the next integer or float from the RNG.
+          </li>
+        </ol>
+        <pre class="diagram">block hash
+    |
+    v
+ 32-byte seed  --->  ChaCha8 RNG  --->  stream of numbers
+                                              |
+                                              v
+                         choose(mode), choose(progression),
+                         choose(rhythm), pick(pitch), ...
+                                              |
+                                              v
+                                    MIDI notes (deterministic)</pre>
+        <p>
+          Same hash → same RNG stream → same choices → same MIDI.
+          Change one bit of the hash → a different stream → different picks at every fork,
+          so the piece changes, while it still obeys the same musical rules.
+        </p>
+        <p>
+          Weighted choices (e.g. Ionian more often than Lydian) roll
+          <code>IntN(totalWeight)</code> and walk the weight table.
+          Uniform lists (tempos, ensembles, pitch candidates) use
+          <code>xs[IntN(len(xs))]</code>.
+          Probabilistic rules (e.g. “70% chord tone on the strong beat”) roll a float in <code>[0,1)</code>.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="order">
+        <div class="frame-label">02 // draw order</div>
+        <h2>What the RNG decides, in order</h2>
+        <p>
+          The stream is consumed left-to-right. Early draws set the piece’s identity;
+          later draws fill in notes. Approximate order:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Step</th><th>Drawn from the hash-seeded RNG</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1. Key</td><td>Root (0–11), then weighted mode</td></tr>
+            <tr><td>2. Groove</td><td>Meter (4/4 or 3/4), BPM from a fixed list, chip ensemble</td></tr>
+            <tr><td>3. Harmony plan</td><td>One open / middle / cadence chord-degree row for that mode</td></tr>
+            <tr><td>4. Melody rhythms</td><td>Body patterns <code>a,b</code> / <code>x,y</code> and phrase endings</td></tr>
+            <tr><td>5. Melody pitches</td><td>Among legal scale/chord tones under contour rules; floats for “which rule branch”</td></tr>
+            <tr><td>6. Comping</td><td>Pulse style, or arp direction / step size</td></tr>
+            <tr><td>7. Bass</td><td>Which root/fifth pattern for the meter</td></tr>
+            <tr><td>8. Drums</td><td>Groove + fill patterns; small velocity jitter per hit</td></tr>
+            <tr><td>Throughout</td><td>Velocity accents get a tiny ± jitter from the same stream</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Everything not listed — 16-bar form, allowed progressions, scale grammar,
+          MIDI registers — is hard-coded. The hash only steers <em>which legal option</em> wins.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="globals">
+        <div class="frame-label">03 // globals</div>
+        <h2>Global parameters</h2>
+        <table>
+          <thead>
+            <tr><th>Parameter</th><th>How the RNG picks it</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Root</td><td><code>IntN(12)</code> — uniform pitch class</td></tr>
+            <tr><td>Mode</td><td>All 7 modes, weighted: Ionian/Dorian/Mixolydian/Aeolian 16, Phrygian 14, Lydian 12, Locrian 10</td></tr>
+            <tr><td>Meter</td><td>Weighted: 4/4 (3) or 3/4 (1)</td></tr>
+            <tr><td>BPM</td><td>Uniform from {100, 112, 124, 136, 148, 160, 172, 184, 196, 208}</td></tr>
+            <tr><td>Ensemble</td><td>Uniform chip lead / chords / bass set (drums always on)</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Timing uses PPQ = 480 ticks per quarter. One sixteenth = 120 ticks.
+          A bar is <code>beats × 480</code> ticks.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="form">
+        <div class="frame-label">04 // form</div>
+        <h2>Form — always 16 bars</h2>
+        <p>Structure is fixed. The hash only picks <em>which</em> progression rows fill it.</p>
+        <pre class="diagram">bars  1–4   phrase A   open progression   &lt;-- RNG picks one open row
+bars  5–8   phrase A   same chords; melody mostly restated
+bars  9–12  phrase B   middle / contrast  &lt;-- RNG picks one middle row
+bars 13–16  cadence    ends on tonic       &lt;-- RNG picks one cadence row</pre>
+        <p>
+          Degrees are 0-based scale degrees — e.g. Ionian <code>{0, 4, 5, 3}</code> → I–V–vi–IV.
+          If a bar is IV and the next is I, and the IV seventh is dominant in that key,
+          it becomes a dominant 7th (secondary-dominant color into I). That rule is fixed, not random.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="voicing">
+        <div class="frame-label">05 // voicing</div>
+        <h2>Chord voicing</h2>
+        <p>
+          Voicings are not random. Each bar picks the close-position layout in MIDI
+          <strong>47–64</strong> that best matches the previous bar (least motion, near center <strong>55</strong>).
+          The hash already chose the chord; this step only finds its register.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="melody">
+        <div class="frame-label">06 // melody</div>
+        <h2>Melody</h2>
+        <h3>Rhythm (RNG picks patterns)</h3>
+        <p>
+          From meter-specific catalogs, the stream picks body patterns and endings:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Bars</th><th>Pattern</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1–4</td><td><code>a, b, a, end</code> — <code>a</code>/<code>b</code>/<code>end</code> drawn from weighted lists</td></tr>
+            <tr><td>5–8</td><td>reuse <code>a, b, a</code>; new <code>end</code>; bars 5–7 <strong>copy</strong> melody pitches from 1–3 (no new pitch draws)</td></tr>
+            <tr><td>9–12</td><td>new <code>x, y, x, end</code></td></tr>
+            <tr><td>13–16</td><td><code>a, b, y, final</code> (final = whole-bar hold, fixed)</td></tr>
+          </tbody>
+        </table>
+        <h3>Pitch (RNG picks among legal tones)</h3>
+        <p>
+          For each attack, hard rules first narrow the candidates (scale tones, chord tones,
+          leap resolution, approach into the next bar, final tonic).
+          Only then does the RNG break ties or take a probabilistic branch:
+        </p>
+        <table>
+          <thead>
+            <tr><th>When</th><th>Rule (RNG role)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Last note of the piece</td><td>Tonic — deterministic among nearest tonics</td></tr>
+            <tr><td>Downbeat</td><td>Chord tone; 40% roll asks to avoid repeating previous pitch</td></tr>
+            <tr><td>Long note (≥ 6 sixteenths)</td><td>Chord tone, avoid repeat; pick among best-cost tones</td></tr>
+            <tr><td>Strong beat (beat 3 in 4/4)</td><td>70% roll → chord tone, else walk</td></tr>
+            <tr><td>Last note filling a non-final bar</td><td>Approach tone into next chord (side may be random if tied)</td></tr>
+            <tr><td>Otherwise</td><td>Walk: float picks step / repeat / skip / leap among scale indices</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Non-final notes are shortened to 85% of the slot. Velocity uses a fixed phrase swell
+          plus a small hash-driven jitter.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="harmony">
+        <div class="frame-label">07 // harmony</div>
+        <h2>Harmony track</h2>
+        <ul>
+          <li>
+            <strong>chip-arp</strong> — RNG: up (70%) vs down, step 2 vs 1 (35%).
+            Notes are the bar’s voicing tones in order. Final bar holds the root.
+          </li>
+          <li>
+            <strong>chip-chord</strong> — RNG picks a pulsed rhythm; every hit plays all voicing pitches.
+            Length ≈ 70% of the slot (full on the final bar).
+          </li>
+        </ul>
+      </section>
+
+      <section class="frame doc-section" id="bass">
+        <div class="frame-label">08 // bass</div>
+        <h2>Bass</h2>
+        <p>
+          RNG picks a meter-specific root/fifth/rest pattern.
+          Pitch placement in MIDI <strong>34–48</strong> (nearest previous root) is deterministic.
+          Final bar = one root for the whole bar. Non-final notes shortened to 92%.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="drums">
+        <div class="frame-label">09 // drums</div>
+        <h2>Drums</h2>
+        <p>General MIDI channel 10 pitches are fixed:</p>
+        <pre class="diagram">kick 36   snare 38   closed hat 42   open hat 46</pre>
+        <ul>
+          <li>RNG picks a body groove for the meter</li>
+          <li>RNG picks a fill for every 4th bar (not the last)</li>
+          <li>Final bar uses a fixed ending figure</li>
+          <li>Each hit gets velocity ±2 from the stream</li>
+        </ul>
+      </section>
+
+      <section class="frame doc-section" id="midi">
+        <div class="frame-label">10 // midi</div>
+        <h2>MIDI file</h2>
+        <p>
+          After composition, notes are encoded as a format-1 Standard MIDI File
+          (no further hash draws): conductor track with title <code>Block &lt;hash&gt;</code>,
+          tempo and meter; then melody, harmony, bass, and drums on channel 10.
+        </p>
+      </section>
+
+      <section class="frame doc-section" id="fixed">
+        <div class="frame-label">11 // summary</div>
+        <h2>In one sentence</h2>
+        <p>
+          The block hash <strong>seeds a RNG</strong>; the composer
+          <strong>asks that RNG at every choice point</strong> inside a fixed rulebook;
+          the result is a unique but musically legal 16-bar chiptune for that block.
+        </p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <pre><a href="/">--- back to player ---</a></pre>
+    </footer>
+  </div>
+</body>
+</html>
