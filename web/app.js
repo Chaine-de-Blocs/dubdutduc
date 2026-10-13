@@ -26,9 +26,101 @@ const state = {
   prefetchToken: 0,
   voices: [],
   parts: [],
+  pendingShare: readShareParam(),
+  shareFlash: 0,
 };
 
 /* ---------- catalog ---------- */
+
+$("search-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("search").value.trim();
+  if (!q) return;
+  const msg = $("search-msg");
+  msg.hidden = false;
+  msg.classList.remove("error");
+  msg.textContent = "searching...";
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+    const text = await res.text();
+    if (!res.ok) {
+      msg.classList.add("error");
+      msg.textContent = res.status === 404 ? "not found" : text.trim() || "search failed";
+      return;
+    }
+    const data = JSON.parse(text);
+    await refresh();
+    if (data.block) {
+      msg.hidden = true;
+      Tone.start();
+      load(data.block.height, true);
+      scrollToRow(data.block.height);
+      return;
+    }
+    if (data.blocks?.length) {
+      msg.textContent = `${data.blocks.length} matches — pick one below`;
+      scrollToRow(data.blocks[0].height);
+      return;
+    }
+    msg.classList.add("error");
+    msg.textContent = "not found";
+  } catch {
+    msg.classList.add("error");
+    msg.textContent = "search failed";
+  }
+});
+
+function scrollToRow(height) {
+  const li = state.rows.get(height);
+  if (li) li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function readShareParam() {
+  const b = new URLSearchParams(location.search).get("b");
+  if (b != null && /^\d+$/.test(b)) return Number(b);
+  return null;
+}
+
+function blockURL(height) {
+  const u = new URL(location.href);
+  u.searchParams.set("b", String(height));
+  u.hash = "";
+  return u.toString();
+}
+
+function syncShareURL(height) {
+  const u = new URL(location.href);
+  if (u.searchParams.get("b") === String(height)) return;
+  u.searchParams.set("b", String(height));
+  history.replaceState(null, "", `${u.pathname}${u.search}${u.hash}`);
+}
+
+async function openHeight(height, autoplay) {
+  if (!state.order.includes(height)) {
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(height)}`, { cache: "no-store" });
+      if (!res.ok) {
+        $("p-block").innerHTML = `<a class="block-link" href="${explorerUrl(height)}" target="_blank" rel="noopener noreferrer">Block #${fmtHeight(height)}</a>`;
+        $("p-key").textContent = "Not found";
+        $("p-meta").textContent = "Shared block could not be loaded.";
+        if (state.order.length) load(state.order[0], false);
+        return;
+      }
+      const cat = await fetch("/api/blocks", { cache: "no-store" });
+      if (cat.ok) {
+        const { blocks, status } = await cat.json();
+        renderStatus(status);
+        renderList(blocks, status);
+      }
+    } catch {
+      $("p-meta").textContent = "Shared block could not be loaded.";
+      if (state.order.length) load(state.order[0], false);
+      return;
+    }
+  }
+  await load(height, autoplay);
+  scrollToRow(height);
+}
 
 async function refresh() {
   try {
@@ -37,7 +129,15 @@ async function refresh() {
     const { blocks, status } = await res.json();
     renderStatus(status);
     renderList(blocks, status);
-    if (!state.current && blocks.length && state.loadToken === 0) load(blocks[0].height, false);
+    if (!state.current && blocks.length && state.loadToken === 0) {
+      if (state.pendingShare != null) {
+        const height = state.pendingShare;
+        state.pendingShare = null;
+        openHeight(height, false);
+      } else {
+        load(blocks[0].height, false);
+      }
+    }
   } catch {
     renderStatus({ error: "Server unreachable" });
   }
@@ -252,10 +352,12 @@ function renderPanel(s) {
   dl.href = `/api/blocks/${s.height}/midi`;
   dl.download = `block-${s.height}.mid`;
   dl.hidden = false;
+  $("share").hidden = false;
   $("play").disabled = false;
   $("stop").disabled = false;
   $("prev").disabled = false;
   $("next").disabled = false;
+  syncShareURL(s.height);
 }
 
 async function play() {
@@ -944,6 +1046,23 @@ $("auto").addEventListener("click", () => {
   }
 });
 $("roll-wrap").addEventListener("click", seek);
+$("share").addEventListener("click", async () => {
+  if (!state.current) return;
+  const url = blockURL(state.current.height);
+  const btn = $("share");
+  const flash = ++state.shareFlash;
+  try {
+    await navigator.clipboard.writeText(url);
+    btn.textContent = "[ COPIED ]";
+  } catch {
+    window.prompt("Copy link to this block", url);
+    btn.textContent = "[ SHARE ]";
+    return;
+  }
+  setTimeout(() => {
+    if (state.shareFlash === flash) btn.textContent = "[ SHARE ]";
+  }, 1400);
+});
 syncAutoButton();
 document.addEventListener("keydown", (e) => {
   if (e.target.closest("button, a, input, textarea")) return;

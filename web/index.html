@@ -54,6 +54,7 @@
           <button type="button" id="auto" aria-pressed="true" title="Play the next block when this one ends">[ AUTO ]</button>
           <div class="progress" aria-hidden="true"><div id="progress"></div></div>
           <span class="clock" id="clock">0:00 / 0:00</span>
+          <button type="button" id="share" hidden title="Copy link to this block">[ SHARE ]</button>
           <a class="download" id="download" hidden>[ MIDI ]</a>
         </div>
       </section>
@@ -63,6 +64,11 @@
           <h3>./blocks</h3>
           <span class="count" id="count"></span>
         </div>
+        <form class="search" id="search-form" role="search">
+          <input type="search" id="search" name="q" placeholder="height or hash" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="Search by block height or hash">
+          <button type="submit">[ GO ]</button>
+        </form>
+        <p class="search-msg" id="search-msg" hidden></p>
         <ol class="blocks frame" id="blocks"></ol>
         <p class="empty frame" id="empty">Fetching recent blocks from mempool.space...</p>
       </section>

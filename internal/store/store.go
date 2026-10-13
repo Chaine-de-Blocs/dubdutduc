@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS blocks (
 	mode   TEXT    NOT NULL,
 	bpm    INTEGER NOT NULL,
 	beats  INTEGER NOT NULL
-)`
+);
+CREATE INDEX IF NOT EXISTS blocks_hash ON blocks(hash)`
 
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -102,6 +103,42 @@ func (s *Store) Get(ctx context.Context, height int64) (Block, error) {
 		return b, ErrNotFound
 	}
 	return b, err
+}
+
+// GetByHash returns the block with this exact hash (case-insensitive).
+func (s *Store) GetByHash(ctx context.Context, hash string) (Block, error) {
+	var b Block
+	err := s.db.QueryRowContext(ctx,
+		`SELECT height, hash, time, tonic, mode, bpm, beats FROM blocks WHERE lower(hash) = lower(?)`, hash).
+		Scan(&b.Height, &b.Hash, &b.Time, &b.Tonic, &b.Mode, &b.BPM, &b.Beats)
+	if errors.Is(err, sql.ErrNoRows) {
+		return b, ErrNotFound
+	}
+	return b, err
+}
+
+// FindByHashPrefix returns blocks whose hash starts with prefix (case-insensitive), newest first.
+func (s *Store) FindByHashPrefix(ctx context.Context, prefix string, limit int) ([]Block, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT height, hash, time, tonic, mode, bpm, beats FROM blocks
+		WHERE lower(hash) LIKE lower(?) || '%'
+		ORDER BY height DESC LIMIT ?`, prefix, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Block{}
+	for rows.Next() {
+		var b Block
+		if err := rows.Scan(&b.Height, &b.Hash, &b.Time, &b.Tonic, &b.Mode, &b.BPM, &b.Beats); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 // MaxHeight returns the highest stored height, or false when the catalog is empty.

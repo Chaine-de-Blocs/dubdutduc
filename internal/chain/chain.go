@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -48,6 +49,45 @@ func (c *Client) Blocks(ctx context.Context, height int64) ([]apiBlock, error) {
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
 	return blocks, nil
+}
+
+// BlockByHeight fetches a single block at height from the mempool API.
+func (c *Client) BlockByHeight(ctx context.Context, height int64) (apiBlock, error) {
+	blocks, err := c.Blocks(ctx, height)
+	if err != nil {
+		return apiBlock{}, err
+	}
+	for _, b := range blocks {
+		if b.Height == height {
+			return b, nil
+		}
+	}
+	return apiBlock{}, fmt.Errorf("block %d not found", height)
+}
+
+// BlockByHash fetches a single block by hash from the mempool API.
+func (c *Client) BlockByHash(ctx context.Context, hash string) (apiBlock, error) {
+	url := strings.TrimRight(c.BaseURL, "/") + "/api/block/" + strings.ToLower(strings.TrimSpace(hash))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return apiBlock{}, err
+	}
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return apiBlock{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return apiBlock{}, fmt.Errorf("block %s not found", hash)
+	}
+	if res.StatusCode != http.StatusOK {
+		return apiBlock{}, fmt.Errorf("GET %s: %s", url, res.Status)
+	}
+	var b apiBlock
+	if err := json.NewDecoder(res.Body).Decode(&b); err != nil {
+		return apiBlock{}, fmt.Errorf("GET %s: %w", url, err)
+	}
+	return b, nil
 }
 
 type Status struct {
@@ -172,22 +212,59 @@ func (p *Poller) fill(ctx context.Context) (int64, error) {
 
 func (p *Poller) save(ctx context.Context, blocks []apiBlock) error {
 	for _, b := range blocks {
-		piece := music.Compose(b.ID)
-		added, err := p.Store.Save(ctx, store.Block{
-			Height: b.Height,
-			Hash:   piece.Hash,
-			Time:   b.Timestamp,
-			Tonic:  piece.Tonic(),
-			Mode:   piece.Scale.Mode.String(),
-			BPM:    piece.BPM,
-			Beats:  piece.Beats,
-		})
-		if err != nil {
+		if _, err := p.persist(ctx, b); err != nil {
 			return err
-		}
-		if added {
-			p.Log.Info("new piece", "height", b.Height, "key", piece.Key(), "bpm", piece.BPM)
 		}
 	}
 	return nil
+}
+
+func (p *Poller) persist(ctx context.Context, b apiBlock) (store.Block, error) {
+	piece := music.Compose(b.ID)
+	out := store.Block{
+		Height: b.Height,
+		Hash:   piece.Hash,
+		Time:   b.Timestamp,
+		Tonic:  piece.Tonic(),
+		Mode:   piece.Scale.Mode.String(),
+		BPM:    piece.BPM,
+		Beats:  piece.Beats,
+	}
+	added, err := p.Store.Save(ctx, out)
+	if err != nil {
+		return out, err
+	}
+	if added {
+		p.Log.Info("new piece", "height", b.Height, "key", piece.Key(), "bpm", piece.BPM)
+	}
+	return out, nil
+}
+
+// EnsureHeight returns a stored block, fetching it from mempool.space when missing.
+func (p *Poller) EnsureHeight(ctx context.Context, height int64) (store.Block, error) {
+	if b, err := p.Store.Get(ctx, height); err == nil {
+		return b, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.Block{}, err
+	}
+	api, err := p.Client.BlockByHeight(ctx, height)
+	if err != nil {
+		return store.Block{}, err
+	}
+	return p.persist(ctx, api)
+}
+
+// EnsureHash returns a stored block by hash, fetching it from mempool.space when missing.
+func (p *Poller) EnsureHash(ctx context.Context, hash string) (store.Block, error) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if b, err := p.Store.GetByHash(ctx, hash); err == nil {
+		return b, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.Block{}, err
+	}
+	api, err := p.Client.BlockByHash(ctx, hash)
+	if err != nil {
+		return store.Block{}, err
+	}
+	return p.persist(ctx, api)
 }

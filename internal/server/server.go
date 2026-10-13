@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/Chaine-de-Blocs/dubdutduc/internal/chain"
 	"github.com/Chaine-de-Blocs/dubdutduc/internal/music"
@@ -24,6 +26,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/blocks", s.blocks)
+	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/blocks/{height}/score", s.score)
 	mux.HandleFunc("GET /api/blocks/{height}/midi", s.midi)
 	mux.Handle("GET /", http.FileServerFS(s.Web))
@@ -118,20 +121,107 @@ func (s *Server) midi(w http.ResponseWriter, r *http.Request) {
 	w.Write(music.Compose(b.Hash).MIDI())
 }
 
+func (s *Server) search(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		http.Error(w, "missing q", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+
+	if isDecimalHeight(q) {
+		height, _ := strconv.ParseInt(q, 10, 64)
+		b, err := s.Poller.EnsureHeight(ctx, height)
+		if err != nil {
+			s.searchFail(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"block": withKey(b)})
+		return
+	}
+
+	hash := strings.ToLower(q)
+	if !isHex(hash) || len(hash) < 6 {
+		http.Error(w, "enter a block height or hex hash", http.StatusBadRequest)
+		return
+	}
+
+	if len(hash) == 64 {
+		b, err := s.Poller.EnsureHash(ctx, hash)
+		if err != nil {
+			s.searchFail(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"block": withKey(b)})
+		return
+	}
+
+	matches, err := s.Store.FindByHashPrefix(ctx, hash, 20)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if len(matches) == 0 {
+		http.Error(w, "block not found", http.StatusNotFound)
+		return
+	}
+	if len(matches) == 1 {
+		writeJSON(w, map[string]any{"block": withKey(matches[0])})
+		return
+	}
+	out := make([]blockJSON, len(matches))
+	for i, b := range matches {
+		out[i] = withKey(b)
+	}
+	writeJSON(w, map[string]any{"blocks": out})
+}
+
+func (s *Server) searchFail(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+		http.Error(w, "block not found", http.StatusNotFound)
+		return
+	}
+	s.fail(w, err)
+}
+
+func isDecimalHeight(q string) bool {
+	if q == "" {
+		return false
+	}
+	for _, r := range q {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(q string) bool {
+	if q == "" {
+		return false
+	}
+	for _, r := range q {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (store.Block, bool) {
 	height, err := strconv.ParseInt(r.PathValue("height"), 10, 64)
-	if err != nil {
+	if err != nil || height < 0 {
 		http.Error(w, "invalid block height", http.StatusBadRequest)
 		return store.Block{}, false
 	}
-	b, err := s.Store.Get(r.Context(), height)
-	if errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "block not found", http.StatusNotFound)
-		return b, false
-	}
+	b, err := s.Poller.EnsureHeight(r.Context(), height)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			http.Error(w, "block not found", http.StatusNotFound)
+			return store.Block{}, false
+		}
 		s.fail(w, err)
-		return b, false
+		return store.Block{}, false
 	}
 	return b, true
 }

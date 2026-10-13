@@ -431,6 +431,61 @@ button[aria-pressed="true"] {
   text-transform: uppercase;
 }
 
+.search {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+  align-items: stretch;
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: var(--bg-deep, transparent);
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  outline: none;
+}
+
+.search input::placeholder {
+  color: var(--muted);
+}
+
+.search input:focus {
+  border-color: var(--text);
+}
+
+.search button {
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.search button:hover {
+  border-color: var(--text);
+}
+
+.search-msg {
+  margin: 0 0 10px;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.search-msg.error {
+  color: var(--danger, #a33);
+}
+
 .blocks {
   margin: 0;
   padding: 0;
