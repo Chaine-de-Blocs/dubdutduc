@@ -861,7 +861,7 @@ const PRESETS = {
     voice: Tone.Synth,
     volume: -15,
     fx: [
-      () => new Tone.Filter(4500, "highpass"),
+      () => new Tone.Filter(4500, "lowpass"),
       chipCrush(7, 0.2),
       pingPong(0.2, "16n"),
       room(0.1, 0.35),
