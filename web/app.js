@@ -884,46 +884,55 @@ const PRESETS = {
 };
 
 function chipChordVoice(dest = master(), spb = 0.4) {
-  // Soft pulse pad: frame-rate chord cycle without a second oscillator into the DAC shaper.
-  const synth = new Tone.Synth({
-    oscillator: { type: "pulse", width: 0.5 },
-    envelope: { attack: 0.002, decay: 0.1, sustain: 0.28, release: 0.04 },
+  const arpSynth = new Tone.Synth({
+    oscillator: { type: "pulse", width: 0.25 },
+    envelope: { attack: 0.001, decay: 0.14, sustain: 0.42, release: 0.025 },
   });
-  synth.volume.value = -18;
+  arpSynth.volume.value = -13;
 
-  const shaper = dacShaper(48)();
-  const filter = new Tone.Filter(4200, "lowpass");
-  const echo = trackerEcho(spb * 0.5, 0.1, 0.06)();
+  const subSynth = new Tone.Synth({
+    oscillator: { type: "pulse", width: 0.5 },
+    envelope: { attack: 0.002, decay: 0.16, sustain: 0.3, release: 0.03 },
+  });
+  subSynth.volume.value = -19;
 
-  synth.chain(shaper, filter, echo, dest);
+  const shaper = dacShaper(24)();
+  const filter = new Tone.Filter(6400, "lowpass");
+  const echo = trackerEcho(spb * 0.5, 0.14, 0.08)();
+
+  arpSynth.chain(shaper, filter, echo, dest);
+  subSynth.chain(filter);
 
   return {
     play: (e, time) => {
-      const vel = Math.min(0.85, Math.max(0, e.vel * 0.75));
+      const vel = Math.min(1, Math.max(0, e.vel));
       const freqs = e.freqs?.length ? e.freqs : [e.freq];
-      const widthParam = synth.oscillator.width;
+      const widthParam = arpSynth.oscillator.width;
       if (widthParam) {
-        widthParam.setValueAtTime(0.5, time);
-        if (e.dur > NTSC_FRAME * 3) {
-          widthParam.setValueAtTime(0.25, time + NTSC_FRAME * 3);
+        widthParam.setValueAtTime(0.125, time);
+        if (e.dur > NTSC_FRAME * 2) {
+          widthParam.setValueAtTime(0.25, time + NTSC_FRAME * 2);
         }
       }
-      synth.triggerAttackRelease(freqs[0], e.dur, time, vel);
+      arpSynth.triggerAttackRelease(freqs[0], e.dur, time, vel);
+      subSynth.triggerAttackRelease(freqs[0], e.dur, time, vel * 0.8);
 
       if (freqs.length > 1) {
         const steps = Math.max(1, Math.floor(e.dur / NTSC_FRAME));
         for (let i = 1; i < steps; i++) {
-          synth.frequency.setValueAtTime(freqs[i % freqs.length], time + i * NTSC_FRAME);
+          arpSynth.frequency.setValueAtTime(freqs[i % freqs.length], time + i * NTSC_FRAME);
         }
       }
     },
     release: () => {
       const now = Tone.now();
-      synth.frequency.cancelScheduledValues(now);
-      synth.triggerRelease();
+      arpSynth.frequency.cancelScheduledValues(now);
+      arpSynth.triggerRelease();
+      subSynth.triggerRelease();
     },
     dispose: () => {
-      synth.dispose();
+      arpSynth.dispose();
+      subSynth.dispose();
       shaper.dispose();
       filter.dispose();
       echo.dispose();
