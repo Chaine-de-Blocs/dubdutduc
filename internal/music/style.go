@@ -357,9 +357,10 @@ var pulsedComping = map[int][]weighted[rhythm]{
 }
 
 const (
-	bassRoot  = 0
-	bassFifth = 1
-	bassRest  = -1
+	bassRoot   = 0
+	bassFifth  = 1
+	bassOctave = 2
+	bassRest   = -1
 )
 
 type bassHit struct {
@@ -379,6 +380,10 @@ var bassPatterns = map[int][]weighted[[]bassHit]{
 		{[]bassHit{{4, bassRoot}, {2, bassFifth}, {2, bassFifth}, {4, bassRoot}, {4, bassFifth}}, 2},
 		{[]bassHit{{6, bassRoot}, {2, bassFifth}, {4, bassFifth}, {4, bassRoot}}, 1},
 		{[]bassHit{{4, bassRoot}, {4, bassRest}, {4, bassFifth}, {4, bassRest}}, 1},
+		// driving chiptune / octave-jumping bass
+		{[]bassHit{{2, bassRoot}, {2, bassOctave}, {2, bassRoot}, {2, bassFifth}, {2, bassRoot}, {2, bassOctave}, {2, bassFifth}, {2, bassOctave}}, 3},
+		{[]bassHit{{2, bassRoot}, {2, bassRoot}, {2, bassOctave}, {2, bassFifth}, {3, bassRoot}, {3, bassFifth}, {2, bassOctave}}, 3},
+		{[]bassHit{{3, bassRoot}, {1, bassOctave}, {2, bassRoot}, {2, bassFifth}, {3, bassRoot}, {1, bassOctave}, {2, bassFifth}, {2, bassRoot}}, 2},
 	},
 	3: {
 		{[]bassHit{{8, bassRoot}, {4, bassFifth}}, 3},
@@ -386,6 +391,7 @@ var bassPatterns = map[int][]weighted[[]bassHit]{
 		{[]bassHit{{4, bassRoot}, {4, bassFifth}, {4, bassRoot}}, 2},
 		{[]bassHit{{4, bassRoot}, {2, bassRoot}, {2, bassFifth}, {4, bassFifth}}, 2},
 		{[]bassHit{{6, bassRoot}, {2, bassFifth}, {4, bassRoot}}, 1},
+		{[]bassHit{{2, bassRoot}, {2, bassOctave}, {2, bassFifth}, {2, bassOctave}, {2, bassRoot}, {2, bassFifth}}, 2},
 	},
 }
 

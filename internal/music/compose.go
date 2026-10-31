@@ -362,8 +362,11 @@ func (c *composer) bassline() {
 		for _, h := range hits {
 			if h.tone != bassRest {
 				p := root
-				if h.tone == bassFifth {
+				switch h.tone {
+				case bassFifth:
 					p = fifth
+				case bassOctave:
+					p = root + 12
 				}
 				dur := h.units * Sixteenth
 				if bar != last {

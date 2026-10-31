@@ -480,15 +480,9 @@ function schedule(s, { from = 0, continuous = false, fadeIn = 0 } = {}) {
   const voices = [];
   const parts = [];
   for (const track of s.tracks) {
-    const voice = track.role === "drums" ? drumKit(gain) : instrument(track.instrument, gain);
+    const voice = track.role === "drums" ? drumKit(gain) : instrument(track.instrument, gain, spb);
     voices.push(voice);
-    const events = track.notes.map((n) => ({
-      time: n.start * spb,
-      midi: n.midi,
-      freq: Tone.Frequency(n.midi, "midi").toFrequency(),
-      dur: n.duration * spb,
-      vel: n.velocity / 127,
-    }));
+    const events = buildEvents(track, spb);
     const part = new Tone.Part((time, e) => voice.play(e, time), events);
     part.start(from);
     parts.push(part);
@@ -714,270 +708,377 @@ function drawDrumLane(ctx, drumTrack, s, w, h, pitchH, x) {
 
 /* ---------- instruments ---------- */
 
+const NTSC_FRAME = 1 / 60;
+const SEMI_DOWN = Math.pow(2, -1 / 12);
+
 let bus;
 
 function master() {
   if (bus) return bus;
   const limiter = new Tone.Limiter(-1).toDestination();
-  const comp = new Tone.Compressor({ threshold: -14, ratio: 3, attack: 0.005, release: 0.12 }).connect(limiter);
-  bus = new Tone.Filter(7200, "lowpass").connect(comp);
+  const comp = new Tone.Compressor({ threshold: -12, ratio: 3.5, attack: 0.003, release: 0.08 }).connect(limiter);
+  bus = new Tone.Filter(11000, "lowpass").connect(comp);
   return bus;
 }
 
-function leadEcho(wet = 0.28, feedback = 0.3, delayTime = "8n") {
+function dacShaper(steps = 16) {
+  const n = 512;
+  const curve = new Float32Array(n);
+  const half = steps / 2;
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / (n - 1) - 1;
+    curve[i] = Math.round(x * half) / half;
+  }
+  return () => new Tone.WaveShaper(curve, n);
+}
+
+function trackerEcho(delaySec = 0.16, wet = 0.2, feedback = 0.12) {
+  const delayTime = Math.min(0.6, Math.max(0.05, delaySec));
   return () =>
     new Tone.FeedbackDelay({
       delayTime,
       feedback,
       wet,
-      maxDelay: 1.5,
+      maxDelay: 1.0,
     });
 }
 
-function pingPong(wet = 0.22, delayTime = "8n") {
-  return () =>
-    new Tone.PingPongDelay({
-      delayTime,
-      feedback: 0.22,
-      wet,
-      maxDelay: 1.5,
+function buildEvents(track, spb) {
+  if (track.instrument === "chip-chord") {
+    const byStart = new Map();
+    for (const n of track.notes) {
+      let g = byStart.get(n.start);
+      if (!g) {
+        g = {
+          time: n.start * spb,
+          dur: n.duration * spb,
+          vel: n.velocity / 127,
+          midis: [],
+        };
+        byStart.set(n.start, g);
+      }
+      g.midis.push(n.midi);
+    }
+    return [...byStart.values()].map((g) => {
+      g.midis.sort((a, b) => a - b);
+      const freqs = g.midis.map((m) => Tone.Frequency(m, "midi").toFrequency());
+      return {
+        time: g.time,
+        midi: g.midis[0],
+        freq: freqs[0],
+        freqs,
+        dur: g.dur,
+        vel: g.vel,
+      };
     });
-}
-
-function leadVibrato(depth = 0.05, freq = 5.5) {
-  return () => new Tone.Vibrato({ frequency: freq, depth, wet: 0.45 });
-}
-
-function chipCrush(bits = 5, wet = 0.35) {
-  return () => new Tone.BitCrusher({ bits, wet });
-}
-
-function softDistort(amount = 0.18, wet = 0.28) {
-  return () => new Tone.Distortion({ distortion: amount, wet, oversample: "2x" });
-}
-
-function chipPhaser(wet = 0.3) {
-  return () =>
-    new Tone.Phaser({
-      frequency: 0.4,
-      octaves: 2.5,
-      baseFrequency: 400,
-      wet,
-    });
-}
-
-function chipChorus(wet = 0.3) {
-  return () =>
-    new Tone.Chorus({ frequency: 2.4, delayTime: 2.2, depth: 0.45, wet }).start();
-}
-
-function autoWah(base = 600, wet = 0.35) {
-  return () =>
-    new Tone.AutoFilter({
-      frequency: 2.5,
-      baseFrequency: base,
-      octaves: 2.2,
-      type: "sine",
-      wet,
-    }).start();
-}
-
-// Freeverb.roomSize must stay within [0, 1]
-function room(wet = 0.14, roomSize = 0.55) {
-  return () =>
-    new Tone.Freeverb({
-      roomSize: Math.min(1, Math.max(0, roomSize)),
-      dampening: 4500,
-      wet: Math.min(1, Math.max(0, wet)),
-    });
-}
-
-function tremolo(freq = 6, depth = 0.35, wet = 0.4) {
-  return () => new Tone.Tremolo({ frequency: freq, depth, wet, type: "square" }).start();
+  }
+  return track.notes.map((n) => {
+    const freq = Tone.Frequency(n.midi, "midi").toFrequency();
+    return {
+      time: n.start * spb,
+      midi: n.midi,
+      freq,
+      freqs: [freq],
+      dur: n.duration * spb,
+      vel: n.velocity / 127,
+    };
+  });
 }
 
 const PRESETS = {
-  square: () => ({
-    voice: Tone.Synth,
-    volume: -9,
+  square: (spb) => ({
+    volume: -8,
+    vibrato: { freq: 6.5, depth: 0.04, delay: 0.14 },
+    duty: [
+      [0, 0.125],
+      [NTSC_FRAME * 1.5, 0.5],
+    ],
+    scoop: SEMI_DOWN,
     fx: [
-      leadVibrato(0.045, 5.8),
-      chipCrush(6, 0.28),
-      softDistort(0.12, 0.2),
-      leadEcho(0.28, 0.3),
-      room(0.12, 0.45),
+      dacShaper(32),
+      () => new Tone.Filter(8500, "lowpass"),
+      trackerEcho(spb * 0.75, 0.2, 0.12),
     ],
     options: {
-      oscillator: { type: "square" },
-      envelope: { attack: 0.002, decay: 0.08, sustain: 0.55, release: 0.06 },
+      oscillator: { type: "pulse", width: 0.5 },
+      envelope: { attack: 0.001, decay: 0.09, sustain: 0.65, release: 0.025 },
     },
   }),
-  pulse: () => ({
-    voice: Tone.Synth,
-    volume: -10,
+  pulse: (spb) => ({
+    volume: -8,
+    vibrato: { freq: 6.8, depth: 0.045, delay: 0.13 },
+    duty: [
+      [0, 0.125],
+      [NTSC_FRAME, 0.25],
+      [NTSC_FRAME * 3, 0.375],
+    ],
+    scoop: SEMI_DOWN,
     fx: [
-      leadVibrato(0.07, 6.2),
-      chipPhaser(0.32),
-      tremolo(7.5, 0.28, 0.25),
-      pingPong(0.26, "8n"),
-      room(0.1, 0.4),
+      dacShaper(32),
+      () => new Tone.Filter(8200, "lowpass"),
+      trackerEcho(spb * 0.5, 0.22, 0.14),
     ],
     options: {
       oscillator: { type: "pulse", width: 0.25 },
-      envelope: { attack: 0.002, decay: 0.1, sustain: 0.5, release: 0.06 },
+      envelope: { attack: 0.001, decay: 0.1, sustain: 0.6, release: 0.025 },
     },
   }),
-  saw: () => ({
-    voice: Tone.Synth,
-    volume: -13,
+  saw: (spb) => ({
+    volume: -10,
+    vibrato: { freq: 6.2, depth: 0.038, delay: 0.15 },
+    scoop: SEMI_DOWN,
     fx: [
-      () => new Tone.Filter(2600, "lowpass"),
-      chipChorus(0.4),
-      autoWah(700, 0.3),
-      softDistort(0.15, 0.22),
-      leadEcho(0.24, 0.28, "8n."),
-      room(0.16, 0.6),
+      dacShaper(14),
+      () => new Tone.Filter(5400, "lowpass"),
+      trackerEcho(spb * 0.75, 0.18, 0.1),
     ],
     options: {
       oscillator: { type: "sawtooth" },
-      envelope: { attack: 0.003, decay: 0.12, sustain: 0.45, release: 0.08 },
+      envelope: { attack: 0.001, decay: 0.11, sustain: 0.58, release: 0.03 },
     },
   }),
-  "chip-chord": () => ({
-    voice: Tone.Synth,
-    volume: -17,
+  "chip-arp": (spb) => ({
+    volume: -12,
+    duty: [
+      [0, 0.125],
+      [NTSC_FRAME, 0.25],
+    ],
     fx: [
-      chipChorus(0.28),
-      () => new Tone.Filter(3200, "lowpass"),
-      leadEcho(0.14, 0.18, "4n"),
-      room(0.2, 0.7),
+      dacShaper(24),
+      () => new Tone.Filter(7200, "lowpass"),
+      trackerEcho(spb * 0.25, 0.18, 0.1),
     ],
     options: {
-      oscillator: { type: "square" },
-      envelope: { attack: 0.001, decay: 0.12, sustain: 0.15, release: 0.08 },
-    },
-  }),
-  "chip-arp": () => ({
-    voice: Tone.Synth,
-    volume: -15,
-    fx: [
-      () => new Tone.Filter(4500, "lowpass"),
-      chipCrush(7, 0.2),
-      pingPong(0.2, "16n"),
-      room(0.1, 0.35),
-    ],
-    options: {
-      oscillator: { type: "pulse", width: 0.35 },
-      envelope: { attack: 0.001, decay: 0.08, sustain: 0.05, release: 0.04 },
+      oscillator: { type: "pulse", width: 0.25 },
+      envelope: { attack: 0.001, decay: 0.07, sustain: 0.35, release: 0.02 },
     },
   }),
   "tri-bass": () => ({
-    voice: Tone.Synth,
-    volume: -7,
+    volume: -5,
+    pitchKick: { mult: 2.0, dur: 0.012 },
     fx: [
-      softDistort(0.22, 0.25),
-      () => new Tone.Filter(1100, "lowpass"),
-      chipChorus(0.12),
+      dacShaper(16),
+      () => new Tone.Filter(3800, "lowpass"),
     ],
     options: {
       oscillator: { type: "triangle" },
-      envelope: { attack: 0.002, decay: 0.18, sustain: 0.35, release: 0.06 },
+      envelope: { attack: 0.001, decay: 0.04, sustain: 0.92, release: 0.008 },
     },
   }),
   "pulse-bass": () => ({
-    voice: Tone.Synth,
-    volume: -10,
+    volume: -8,
+    duty: [
+      [0, 0.5],
+      [NTSC_FRAME * 1.5, 0.18],
+    ],
+    pitchKick: { mult: 1.5, dur: 0.012 },
     fx: [
-      softDistort(0.28, 0.3),
-      () => new Tone.Filter(850, "lowpass"),
-      chipPhaser(0.12),
-      leadEcho(0.08, 0.12, "8n"),
+      dacShaper(16),
+      () => new Tone.Filter(3000, "lowpass"),
     ],
     options: {
-      oscillator: { type: "pulse", width: 0.15 },
-      envelope: { attack: 0.002, decay: 0.16, sustain: 0.3, release: 0.05 },
+      oscillator: { type: "pulse", width: 0.18 },
+      envelope: { attack: 0.001, decay: 0.12, sustain: 0.55, release: 0.015 },
     },
   }),
 };
 
-function instrument(id, dest = master()) {
-  const preset = (PRESETS[id] || PRESETS.square)();
-  const synth = new Tone.PolySynth(preset.voice, preset.options);
-  synth.maxPolyphony = 16;
-  synth.volume.value = preset.volume;
-  const fx = (preset.fx || []).map((make) => make());
-  synth.chain(...fx, dest);
+function chipChordVoice(dest = master(), spb = 0.4) {
+  const arpSynth = new Tone.Synth({
+    oscillator: { type: "pulse", width: 0.25 },
+    envelope: { attack: 0.001, decay: 0.14, sustain: 0.42, release: 0.025 },
+  });
+  arpSynth.volume.value = -13;
+
+  const subSynth = new Tone.Synth({
+    oscillator: { type: "pulse", width: 0.5 },
+    envelope: { attack: 0.002, decay: 0.16, sustain: 0.3, release: 0.03 },
+  });
+  subSynth.volume.value = -19;
+
+  const shaper = dacShaper(24)();
+  const filter = new Tone.Filter(6400, "lowpass");
+  const echo = trackerEcho(spb * 0.5, 0.14, 0.08)();
+
+  arpSynth.chain(shaper, filter, echo, dest);
+  subSynth.chain(filter);
+
   return {
-    play: (e, time) => synth.triggerAttackRelease(e.freq, e.dur, time, Math.min(1, Math.max(0, e.vel))),
-    release: () => synth.releaseAll(),
+    play: (e, time) => {
+      const vel = Math.min(1, Math.max(0, e.vel));
+      const freqs = e.freqs?.length ? e.freqs : [e.freq];
+      const widthParam = arpSynth.oscillator.width;
+      if (widthParam) {
+        widthParam.setValueAtTime(0.125, time);
+        if (e.dur > NTSC_FRAME * 2) {
+          widthParam.setValueAtTime(0.25, time + NTSC_FRAME * 2);
+        }
+      }
+      arpSynth.triggerAttackRelease(freqs[0], e.dur, time, vel);
+      subSynth.triggerAttackRelease(freqs[0], e.dur, time, vel * 0.8);
+
+      if (freqs.length > 1) {
+        const steps = Math.max(1, Math.floor(e.dur / NTSC_FRAME));
+        for (let i = 1; i < steps; i++) {
+          arpSynth.frequency.setValueAtTime(freqs[i % freqs.length], time + i * NTSC_FRAME);
+        }
+      }
+    },
+    release: () => {
+      const now = Tone.now();
+      arpSynth.frequency.cancelScheduledValues(now);
+      arpSynth.triggerRelease();
+      subSynth.triggerRelease();
+    },
+    dispose: () => {
+      arpSynth.dispose();
+      subSynth.dispose();
+      shaper.dispose();
+      filter.dispose();
+      echo.dispose();
+    },
+  };
+}
+
+function instrument(id, dest = master(), spb = 0.4) {
+  if (id === "chip-chord") return chipChordVoice(dest, spb);
+  const preset = (PRESETS[id] || PRESETS.square)(spb);
+  const synth = new Tone.Synth(preset.options);
+  synth.volume.value = preset.volume;
+
+  const nodes = [];
+  let vib = null;
+  if (preset.vibrato) {
+    vib = new Tone.Vibrato({ frequency: preset.vibrato.freq, depth: 0, wet: 1 });
+    nodes.push(vib);
+  }
+  for (const make of preset.fx || []) {
+    nodes.push(make());
+  }
+  synth.chain(...nodes, dest);
+
+  return {
+    play: (e, time) => {
+      const vel = Math.min(1, Math.max(0, e.vel));
+      const widthParam = synth.oscillator.width;
+      if (preset.duty && widthParam) {
+        for (const [offset, w] of preset.duty) {
+          if (offset === 0 || offset < e.dur * 0.75) {
+            widthParam.setValueAtTime(w, time + offset);
+          }
+        }
+      }
+
+      if (preset.pitchKick && e.dur > preset.pitchKick.dur * 1.5) {
+        synth.triggerAttackRelease(e.freq * preset.pitchKick.mult, e.dur, time, vel);
+        synth.frequency.setValueAtTime(e.freq, time + preset.pitchKick.dur);
+      } else if (preset.scoop && e.dur >= 0.11) {
+        synth.triggerAttackRelease(e.freq * preset.scoop, e.dur, time, vel);
+        synth.frequency.setValueAtTime(e.freq, time + NTSC_FRAME);
+      } else {
+        synth.triggerAttackRelease(e.freq, e.dur, time, vel);
+      }
+
+      if (vib && preset.vibrato) {
+        const { depth, delay } = preset.vibrato;
+        vib.depth.cancelScheduledValues(time);
+        vib.depth.setValueAtTime(0, time);
+        if (e.dur > delay + 0.05) {
+          vib.depth.setValueAtTime(0, time + delay);
+          vib.depth.linearRampToValueAtTime(depth, time + delay + 0.07);
+          vib.depth.setValueAtTime(0, time + e.dur);
+        }
+      }
+    },
+    release: () => {
+      const now = Tone.now();
+      synth.frequency.cancelScheduledValues(now);
+      if (vib) vib.depth.cancelScheduledValues(now);
+      synth.triggerRelease();
+    },
     dispose: () => {
       synth.dispose();
-      fx.forEach((f) => f.dispose());
+      nodes.forEach((n) => n.dispose());
     },
   };
 }
 
 function drumKit(dest = master()) {
+  const kickShaper = dacShaper(16)();
   const kick = new Tone.MembraneSynth({
-    pitchDecay: 0.012,
-    octaves: 4,
-    oscillator: { type: "sine" },
-    envelope: { attack: 0.001, decay: 0.18, sustain: 0, release: 0.05 },
+    pitchDecay: 0.022,
+    octaves: 5.5,
+    oscillator: { type: "triangle" },
+    envelope: { attack: 0.001, decay: 0.14, sustain: 0, release: 0.03 },
   });
-  kick.volume.value = -4;
+  kick.volume.value = -3;
 
+  const kickClick = new Tone.NoiseSynth({
+    noise: { type: "white" },
+    envelope: { attack: 0.001, decay: 0.01, sustain: 0, release: 0.005 },
+  });
+  const kickClickFilter = new Tone.Filter(2200, "bandpass");
+  kickClick.volume.value = -12;
+
+  const snareShaper = dacShaper(8)();
   const snare = new Tone.NoiseSynth({
     noise: { type: "white" },
-    envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.04 },
+    envelope: { attack: 0.001, decay: 0.13, sustain: 0, release: 0.03 },
   });
+  const snareHP = new Tone.Filter(1200, "highpass");
+  const snareLP = new Tone.Filter(7200, "lowpass");
   const snareTone = new Tone.MembraneSynth({
-    pitchDecay: 0.01,
-    octaves: 2,
+    pitchDecay: 0.016,
+    octaves: 2.4,
     oscillator: { type: "triangle" },
-    envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.03 },
+    envelope: { attack: 0.001, decay: 0.06, sustain: 0, release: 0.02 },
   });
-  snare.volume.value = -10;
-  snareTone.volume.value = -14;
+  snare.volume.value = -8;
+  snareTone.volume.value = -9;
 
+  const hatShaper = dacShaper(8)();
   const hat = new Tone.NoiseSynth({
     noise: { type: "white" },
-    envelope: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.01 },
+    envelope: { attack: 0.001, decay: 0.032, sustain: 0, release: 0.01 },
   });
-  const hatFilter = new Tone.Filter(9000, "highpass");
-  hat.volume.value = -18;
+  const hatFilter = new Tone.Filter(8200, "highpass");
+  hat.volume.value = -16;
 
   const openHat = new Tone.NoiseSynth({
     noise: { type: "white" },
-    envelope: { attack: 0.001, decay: 0.22, sustain: 0, release: 0.08 },
+    envelope: { attack: 0.001, decay: 0.19, sustain: 0, release: 0.05 },
   });
-  const openFilter = new Tone.Filter(7000, "highpass");
-  openHat.volume.value = -16;
+  const openFilter = new Tone.Filter(6800, "highpass");
+  openHat.volume.value = -14;
 
-  kick.connect(dest);
-  snare.connect(dest);
-  snareTone.connect(dest);
-  hat.chain(hatFilter, dest);
-  openHat.chain(openFilter, dest);
+  kick.chain(kickShaper, dest);
+  kickClick.chain(kickClickFilter, dest);
+  snare.chain(snareShaper, snareHP, snareLP, dest);
+  snareTone.chain(kickShaper, dest);
+  hat.chain(hatShaper, hatFilter, dest);
+  openHat.chain(hatShaper, openFilter, dest);
 
   return {
     play: (e, time) => {
       switch (e.midi) {
         case 36:
-          kick.triggerAttackRelease(80, Math.min(e.dur, 0.18), time, e.vel);
+          kick.triggerAttackRelease(52, Math.min(e.dur, 0.15), time, e.vel);
+          kickClick.triggerAttackRelease(0.01, time, e.vel * 0.8);
           break;
         case 38:
-          snare.triggerAttackRelease(Math.min(e.dur, 0.14), time, e.vel);
-          snareTone.triggerAttackRelease(180, 0.08, time, e.vel * 0.7);
+          snare.triggerAttackRelease(Math.min(e.dur, 0.13), time, e.vel);
+          snareTone.triggerAttackRelease(195, 0.055, time, e.vel * 0.85);
           break;
         case 46:
-          openHat.triggerAttackRelease(Math.min(e.dur, 0.28), time, e.vel);
+          openHat.triggerAttackRelease(Math.min(e.dur, 0.22), time, e.vel);
           break;
         default:
-          hat.triggerAttackRelease(Math.min(e.dur, 0.05), time, e.vel);
+          hat.triggerAttackRelease(Math.min(e.dur, 0.035), time, e.vel);
       }
     },
     release: () => {
       kick.triggerRelease();
+      kickClick.triggerRelease();
       snare.triggerRelease();
       snareTone.triggerRelease();
       hat.triggerRelease();
@@ -985,9 +1086,16 @@ function drumKit(dest = master()) {
     },
     dispose: () => {
       kick.dispose();
+      kickShaper.dispose();
+      kickClick.dispose();
+      kickClickFilter.dispose();
       snare.dispose();
+      snareShaper.dispose();
+      snareHP.dispose();
+      snareLP.dispose();
       snareTone.dispose();
       hat.dispose();
+      hatShaper.dispose();
       hatFilter.dispose();
       openHat.dispose();
       openFilter.dispose();
