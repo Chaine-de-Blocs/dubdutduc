@@ -28,22 +28,42 @@ func sampleHashes() []string {
 }
 
 func TestComposeIsDeterministic(t *testing.T) {
-	for _, h := range blockHashes {
-		if !reflect.DeepEqual(Compose(h), Compose(h)) {
+	for i, h := range blockHashes {
+		height := int64(i)
+		if !reflect.DeepEqual(Compose(h, height), Compose(h, height)) {
 			t.Fatalf("hash %s produced two different pieces", h)
 		}
-		if !bytes.Equal(Compose(h).MIDI(), Compose(h).MIDI()) {
+		if !bytes.Equal(Compose(h, height).MIDI(), Compose(h, height).MIDI()) {
 			t.Fatalf("hash %s produced two different MIDI files", h)
 		}
 	}
-	if reflect.DeepEqual(Compose(blockHashes[0]).Melody, Compose(blockHashes[1]).Melody) {
+	if reflect.DeepEqual(Compose(blockHashes[0], 0).Melody, Compose(blockHashes[1], 0).Melody) {
 		t.Fatal("different hashes produced the same melody")
+	}
+}
+
+func TestCircleOfFifths(t *testing.T) {
+	for height := int64(-3); height < 36; height++ {
+		want := RootForHeight(height)
+		got := Compose(blockHashes[0], height).Scale.Root
+		if got != want {
+			t.Fatalf("height %d: root %d, want %d", height, got, want)
+		}
+		next := Compose(blockHashes[0], height+1).Scale.Root
+		if mod(next-got, 12) != 7 {
+			t.Fatalf("height %d→%d: roots %d→%d, want +5th", height, height+1, got, next)
+		}
+	}
+	if RootForHeight(0) != C {
+		t.Fatalf("height 0 should be C, got %d", RootForHeight(0))
 	}
 }
 
 func TestRhythmsFillTheBar(t *testing.T) {
 	for beats, opts := range bodyRhythms {
-		for _, o := range append(opts, phraseEndRhythms[beats]...) {
+		all := append(append([]weighted[rhythm]{}, opts...), phraseEndRhythms[beats]...)
+		all = append(all, finalRhythms[beats]...)
+		for _, o := range all {
 			if o.v.units() != beats*4 {
 				t.Errorf("%d/4 rhythm %v lasts %d sixteenths", beats, o.v, o.v.units())
 			}
@@ -72,8 +92,8 @@ func TestRhythmsFillTheBar(t *testing.T) {
 }
 
 func TestPieceStructure(t *testing.T) {
-	for _, h := range sampleHashes() {
-		p := Compose(h)
+	for i, h := range sampleHashes() {
+		p := Compose(h, int64(i))
 		bar := p.BarTicks()
 		if len(p.Bars) != 16 {
 			t.Fatalf("%s: %d bars", h, len(p.Bars))
@@ -91,9 +111,12 @@ func TestPieceStructure(t *testing.T) {
 		}
 
 		end := 0
+		lastIdx := len(p.Melody.Notes) - 1
 		for i, n := range p.Melody.Notes {
-			if !p.Scale.Contains(n.Pitch) {
-				t.Fatalf("%s: melody pitch %d is outside %s", h, n.Pitch, p.Key())
+			barIdx := n.Start / bar
+			// Bridge chords may introduce the next tonic outside the mode (Locrian/Phrygian).
+			if !p.Scale.Contains(n.Pitch) && !p.Bars[barIdx].Chord.Has(n.Pitch) {
+				t.Fatalf("%s: melody pitch %d is outside %s and bar %d chord", h, n.Pitch, p.Key(), barIdx+1)
 			}
 			if n.Start < end {
 				t.Fatalf("%s: melody note %d overlaps the previous note", h, i)
@@ -116,14 +139,21 @@ func TestPieceStructure(t *testing.T) {
 			}
 		}
 
-		last := p.Melody.Notes[len(p.Melody.Notes)-1]
-		if mod(last.Pitch-p.Scale.Root, 12) != 0 {
-			t.Fatalf("%s: melody ends on %s in %s", h, PitchName(last.Pitch), p.Key())
+		last := p.Melody.Notes[lastIdx]
+		if mod(last.Pitch-(p.Scale.Root+7), 12) != 0 {
+			t.Fatalf("%s: melody ends on %s, want next tonic in %s", h, PitchName(last.Pitch), p.Key())
 		}
-		if p.Bars[15].Chord.Degree != 0 {
-			t.Fatalf("%s: final chord is %s", h, p.Bars[15].Chord.Roman())
+		bridge := p.Bars[15].Chord
+		if bridge.Degree != 4 || mod(bridge.Root()-(p.Scale.Root+7), 12) != 0 {
+			t.Fatalf("%s: final chord is %s (root %s), want V / next tonic", h, bridge.Roman(), PitchName(bridge.Root()))
 		}
-		for _, b := range p.Bars {
+		if bridge.Quality == Diminished {
+			t.Fatalf("%s: bridge chord must not be diminished, got %s", h, bridge.Name())
+		}
+		for i, b := range p.Bars {
+			if i == 15 {
+				continue
+			}
 			if b.Chord.Quality == Diminished && p.Scale.Mode != Locrian {
 				t.Fatalf("%s: diminished chord %s", h, b.Chord.Name())
 			}
@@ -136,7 +166,7 @@ func TestPieceStructure(t *testing.T) {
 }
 
 func TestMIDIHeader(t *testing.T) {
-	data := Compose(blockHashes[0]).MIDI()
+	data := Compose(blockHashes[0], 0).MIDI()
 	if string(data[:4]) != "MThd" {
 		t.Fatalf("missing MThd header")
 	}
@@ -152,8 +182,8 @@ func TestMIDIHeader(t *testing.T) {
 }
 
 func TestDrumTrack(t *testing.T) {
-	for _, h := range sampleHashes()[:50] {
-		p := Compose(h)
+	for i, h := range sampleHashes()[:50] {
+		p := Compose(h, int64(i))
 		if !p.Drums.Instrument.Drum || len(p.Drums.Notes) == 0 {
 			t.Fatalf("%s: missing drums", h)
 		}

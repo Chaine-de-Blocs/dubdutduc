@@ -62,13 +62,25 @@ func (p *Piece) Tracks() []*Track {
 	return []*Track{&p.Melody, &p.Harmony, &p.Bass, &p.Drums}
 }
 
-// Compose writes a 16-bar piece for hash. The same hash always yields the same piece.
-func Compose(hash string) *Piece {
+// RootForHeight returns the tonic pitch class for a block height.
+// Consecutive heights move by a perfect fifth: (7 × height) mod 12, anchored at C.
+func RootForHeight(height int64) int {
+	h := height % 12
+	if h < 0 {
+		h += 12
+	}
+	return int(7 * h % 12)
+}
+
+// Compose writes a 16-bar piece for hash at height.
+// The tonic walks the circle of fifths by height; everything else is seeded by hash.
+// The same hash and height always yield the same piece.
+func Compose(hash string, height int64) *Piece {
 	hash = strings.ToLower(strings.TrimSpace(hash))
 	r := rand.New(rand.NewChaCha8(seed(hash)))
 
 	p := &Piece{Hash: hash}
-	p.Scale = Scale{Root: r.IntN(12), Mode: choose(r, modeWeights)}
+	p.Scale = Scale{Root: RootForHeight(height), Mode: choose(r, modeWeights)}
 	p.Beats = choose(r, meterWeights)
 	p.BPM = pick(r, tempos)
 	ens := pick(r, ensembles)
@@ -99,17 +111,25 @@ type composer struct {
 }
 
 // harmonize lays out four phrases: A A B cadence.
+// The final bar is always BridgeChord (V / next block's tonic) so height n
+// hangs open into height n+1 on the circle of fifths.
 func (c *composer) harmonize() {
 	h := harmonies[c.p.Scale.Mode]
 	a := pick(c.r, h.open)
 	degrees := slices.Concat(a, a, pick(c.r, h.middle), pick(c.r, h.cadence))
+	degrees[len(degrees)-1] = 4
 
 	var prev []int
 	for i, d := range degrees {
-		chord := c.p.Scale.Chord(d, false)
-		if d == 4 && i+1 < len(degrees) && degrees[i+1] == 0 {
-			if seventh := c.p.Scale.Chord(d, true); seventh.Dominant() {
-				chord = seventh
+		var chord Chord
+		if i == len(degrees)-1 {
+			chord = c.p.Scale.BridgeChord()
+		} else {
+			chord = c.p.Scale.Chord(d, false)
+			if d == 4 && i+1 < len(degrees) && degrees[i+1] == 0 {
+				if seventh := c.p.Scale.Chord(d, true); seventh.Dominant() {
+					chord = seventh
+				}
 			}
 		}
 		v := voice(chord.Tones, prev)
@@ -182,7 +202,7 @@ func (c *composer) melody() {
 		a, b, a, choose(c.r, end),
 		a, b, a, choose(c.r, end),
 		x, y, x, choose(c.r, end),
-		a, b, y, finalRhythms[c.p.Beats],
+		a, b, y, choose(c.r, finalRhythms[c.p.Beats]),
 	}
 
 	m := newMelodist(c.r, c.p.Scale)
@@ -238,7 +258,7 @@ func (c *composer) melodyBar(m *melodist, bar int, r rhythm) {
 		var p int
 		switch {
 		case final && i == lastNote:
-			p = m.tonic()
+			p = m.bridge()
 		case onset == 0:
 			p = m.chordTone(chord, m.r.Float64() < 0.4)
 		case b.units >= 6:
@@ -252,10 +272,7 @@ func (c *composer) melodyBar(m *melodist, bar int, r rhythm) {
 		}
 		m.accept(p)
 
-		dur := b.units * Sixteenth
-		if !final {
-			dur = dur * 85 / 100
-		}
+		dur := b.units * Sixteenth * 85 / 100
 		c.p.Melody.Notes = append(c.p.Melody.Notes, Note{
 			Pitch:    p,
 			Start:    bar*c.barTicks + onset*Sixteenth,
@@ -277,20 +294,12 @@ func (c *composer) comp() {
 	}
 	opts := pulsedComping[c.p.Beats]
 	style := choose(c.r, opts)
-	last := len(c.p.Bars) - 1
 
 	for bar, b := range c.p.Bars {
-		r := style
-		if bar == last {
-			r = finalRhythms[c.p.Beats]
-		}
 		onset := 0
-		for _, hit := range r {
+		for _, hit := range style {
 			if !hit.rest {
 				dur := hit.units * Sixteenth * 7 / 10
-				if bar == last {
-					dur = hit.units * Sixteenth
-				}
 				vel := c.velocity(58, 10, bar, onset)
 				for _, p := range b.Voicing {
 					c.p.Harmony.Notes = append(c.p.Harmony.Notes, Note{
@@ -308,7 +317,6 @@ func (c *composer) comp() {
 
 // arp plays chord tones as a short chip arpeggio that fills each bar.
 func (c *composer) arp() {
-	last := len(c.p.Bars) - 1
 	for bar, b := range c.p.Bars {
 		tones := b.Voicing
 		if len(tones) == 0 {
@@ -320,15 +328,6 @@ func (c *composer) arp() {
 		}
 		up := c.r.Float64() < 0.7
 		n := c.barUnits / step
-		if bar == last {
-			c.p.Harmony.Notes = append(c.p.Harmony.Notes, Note{
-				Pitch:    tones[0],
-				Start:    bar * c.barTicks,
-				Duration: c.barTicks,
-				Velocity: c.velocity(62, 8, bar, 0),
-			})
-			continue
-		}
 		for i := 0; i < n; i++ {
 			idx := i % len(tones)
 			if !up {
@@ -346,7 +345,6 @@ func (c *composer) arp() {
 
 func (c *composer) bassline() {
 	pattern := choose(c.r, bassPatterns[c.p.Beats])
-	last := len(c.p.Bars) - 1
 	prevRoot := 0
 
 	for bar, b := range c.p.Bars {
@@ -354,12 +352,8 @@ func (c *composer) bassline() {
 		fifth := root + mod(b.Chord.Fifth()-b.Chord.Root(), 12)
 		prevRoot = root
 
-		hits := pattern
-		if bar == last {
-			hits = []bassHit{{c.barUnits, bassRoot}}
-		}
 		onset := 0
-		for _, h := range hits {
+		for _, h := range pattern {
 			if h.tone != bassRest {
 				p := root
 				switch h.tone {
@@ -368,14 +362,10 @@ func (c *composer) bassline() {
 				case bassOctave:
 					p = root + 12
 				}
-				dur := h.units * Sixteenth
-				if bar != last {
-					dur = dur * 92 / 100
-				}
 				c.p.Bass.Notes = append(c.p.Bass.Notes, Note{
 					Pitch:    p,
 					Start:    bar*c.barTicks + onset*Sixteenth,
-					Duration: dur,
+					Duration: h.units * Sixteenth * 92 / 100,
 					Velocity: c.velocity(78, 8, bar, onset),
 				})
 			}
@@ -484,7 +474,17 @@ func (m *melodist) accept(p int) {
 
 // chordTone returns the chord tone nearest the previous pitch, turning back after a leap.
 func (m *melodist) chordTone(ch Chord, avoidRepeat bool) int {
-	avoidRepeat = avoidRepeat || m.repeats > 0
+	if p, ok := m.nearestChordTone(ch, avoidRepeat || m.repeats > 0); ok {
+		return p
+	}
+	if p, ok := m.nearestChordTone(ch, false); ok {
+		return p
+	}
+	// Chromatic bridge chords may sit outside the mode (Phrygian/Locrian).
+	return m.pitchClass(ch.Root())
+}
+
+func (m *melodist) nearestChordTone(ch Chord, avoidRepeat bool) (int, bool) {
 	var best []int
 	bestCost := math.MaxInt
 	for _, p := range m.pitches {
@@ -502,9 +502,9 @@ func (m *melodist) chordTone(ch Chord, avoidRepeat bool) int {
 		}
 	}
 	if len(best) == 0 {
-		return m.chordTone(ch, false)
+		return 0, false
 	}
-	return pick(m.r, best)
+	return pick(m.r, best), true
 }
 
 func (m *melodist) walk(ch Chord) int {
@@ -563,13 +563,34 @@ func (m *melodist) approach(ch, next Chord) int {
 }
 
 func (m *melodist) tonic() int {
+	return m.pitchClass(m.root)
+}
+
+// bridge lands on the next block's tonic (perfect fifth up).
+func (m *melodist) bridge() int {
+	return m.pitchClass(m.root + 7)
+}
+
+func (m *melodist) pitchClass(pc int) int {
+	pc = mod(pc, 12)
 	best := -1
 	for _, p := range m.pitches {
-		if mod(p-m.root, 12) == 0 && (best < 0 || abs(p-m.prev) < abs(best-m.prev)) {
+		if mod(p, 12) == pc && (best < 0 || abs(p-m.prev) < abs(best-m.prev)) {
 			best = p
 		}
 	}
-	return best
+	if best >= 0 {
+		return best
+	}
+	// Chromatic fallback (e.g. Locrian has no diatonic perfect fifth).
+	cand := m.prev - mod(m.prev-pc, 12)
+	if alt := cand + 12; abs(alt-m.prev) < abs(cand-m.prev) {
+		return alt
+	}
+	if alt := cand - 12; abs(alt-m.prev) < abs(cand-m.prev) {
+		return alt
+	}
+	return cand
 }
 
 func choose[T any](r *rand.Rand, opts []weighted[T]) T {

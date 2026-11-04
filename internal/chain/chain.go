@@ -220,7 +220,7 @@ func (p *Poller) save(ctx context.Context, blocks []apiBlock) error {
 }
 
 func (p *Poller) persist(ctx context.Context, b apiBlock) (store.Block, error) {
-	piece := music.Compose(b.ID)
+	piece := music.Compose(b.ID, b.Height)
 	out := store.Block{
 		Height: b.Height,
 		Hash:   piece.Hash,

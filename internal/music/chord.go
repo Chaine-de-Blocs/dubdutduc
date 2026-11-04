@@ -19,6 +19,28 @@ type Chord struct {
 	scale   Scale
 }
 
+// BridgeChord is the open ending into the next block's key (a fifth up on the circle).
+// Its root is the next tonic. Prefer diatonic V/v (or V7); if that degree is unstable
+// (Phrygian v°, Locrian ♭5), use a major triad on the next tonic instead.
+func (s Scale) BridgeChord() Chord {
+	if mod(s.Fifth()-s.Root, 12) == 7 {
+		triad := s.Chord(4, false)
+		if triad.Quality != Diminished {
+			if seventh := s.Chord(4, true); seventh.Dominant() {
+				return seventh
+			}
+			return triad
+		}
+	}
+	next := mod(s.Root+7, 12)
+	return Chord{
+		Degree:  4,
+		Tones:   []int{next, mod(next+4, 12), mod(next+7, 12)},
+		Quality: Major,
+		scale:   s,
+	}
+}
+
 // Chord builds the diatonic triad (or seventh chord) stacked in thirds on degree.
 func (s Scale) Chord(degree int, seventh bool) Chord {
 	n := 3

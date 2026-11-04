@@ -87,7 +87,7 @@ func (s *Server) score(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := music.Compose(b.Hash)
+	p := music.Compose(b.Hash, b.Height)
 	b.BPM, b.Beats = p.BPM, p.Beats
 	b.Tonic, b.Mode = p.Tonic(), p.Scale.Mode.String()
 	out := scoreJSON{blockJSON: withKey(b), Length: beats(p.Length())}
@@ -118,7 +118,7 @@ func (s *Server) midi(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "audio/midi")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="block-%d.mid"`, b.Height))
-	w.Write(music.Compose(b.Hash).MIDI())
+	w.Write(music.Compose(b.Hash, b.Height).MIDI())
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {

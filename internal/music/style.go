@@ -9,7 +9,7 @@ type weighted[T any] struct {
 type harmony struct {
 	open    [][]int // phrases 1 and 2, start on the tonic
 	middle  [][]int // phrase 3, contrast
-	cadence [][]int // phrase 4, ends on the tonic
+	cadence [][]int // phrase 4; last bar is replaced by BridgeChord (V / next tonic)
 }
 
 var harmonies = map[Mode]harmony{
@@ -321,9 +321,37 @@ var phraseEndRhythms = map[int][]weighted[rhythm]{
 	},
 }
 
-var finalRhythms = map[int]rhythm{
-	4: rh(16),
-	3: rh(12),
+// finalRhythms end the piece; last sounding note still resolves to tonic in melodyBar.
+// Whole-bar holds are rare so cadences stay rhythmic instead of a static block chord.
+var finalRhythms = map[int][]weighted[rhythm]{
+	4: {
+		{rh(8, 8), 3},
+		{rh(4, 4, 8), 3},
+		{rh(12, -4), 3},
+		{rh(8, 4, -4), 3},
+		{rh(4, 4, 4, -4), 3},
+		{rh(6, 2, 8), 2},
+		{rh(8, 2, 2, -4), 2},
+		{rh(4, 12), 2},
+		{rh(10, 6), 2},
+		{rh(6, 2, 4, -4), 2},
+		{rh(4, 2, 2, 8), 2},
+		{rh(3, 1, 12), 2},
+		{rh(4, 3, 1, 8), 2},
+		{rh(2, 2, 3, 1, 8), 2},
+		{rh(16), 1},
+	},
+	3: {
+		{rh(8, -4), 3},
+		{rh(4, 8), 3},
+		{rh(4, 4, -4), 3},
+		{rh(6, 2, 4), 2},
+		{rh(8, 2, -2), 2},
+		{rh(3, 1, 8), 2},
+		{rh(4, 2, 2, -4), 2},
+		{rh(2, 2, 3, 1, 4), 2},
+		{rh(12), 1},
+	},
 }
 
 var sustainedComping = map[int][]weighted[rhythm]{
